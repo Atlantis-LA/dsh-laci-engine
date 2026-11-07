@@ -1,0 +1,18 @@
+{
+  "name": "laci",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "LACI 模型调度中心：本地引擎/模型导入、显存预估、加载与关闭、OpenAI 兼容网关",
+  "author": "Atlantis",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test",
+    "check": "node scripts/check.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

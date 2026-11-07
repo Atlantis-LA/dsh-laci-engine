@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LACI · 模型调度中心</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <div class="brand"><span class="logo">LACI</span><span class="sub">模型调度中心</span></div>
+    <div class="hdr-right">
+      <button type="button" class="btn ghost" data-act="refresh">刷新</button>
+    </div>
+  </header>
+
+  <!-- 连不上 3101 时由 app.js 填内容 -->
+  <div class="offline" id="offline" hidden></div>
+
+  <!-- 双列总账条：显存 / 槽位，由 app.js 渲染 -->
+  <div class="ledger" id="ledger"></div>
+
+  <!-- 引擎折叠卡片列表，由 app.js 渲染 -->
+  <div id="engines"></div>
+</div>
+
+<!-- 底部按钮条：放在 .app 外面，position:fixed 才相对视口（.app 的 backdrop-filter 会改变包含块） -->
+<footer>
+  <button type="button" class="btn primary" data-act="open-import">+ 导入整合包</button>
+  <button type="button" class="btn" data-act="open-engine">+ 导入引擎</button>
+  <button type="button" class="btn ghost" data-act="open-dsh">接入 DSH</button>
+</footer>
+
+<!-- ==========================================================================
+     弹窗 0/7 · 导入引擎（自己下的引擎，手动配槽位）
+     ========================================================================== -->
+<div class="modal" id="m-engine">
+  <div class="card" style="width:560px">
+    <div class="chead">导入引擎 <span class="espacer"></span><button type="button" class="btn ghost" data-close="m-engine">✕</button></div>
+    <div class="cbody cfgs">
+      <div class="frow">
+        <div class="fi"><label>类型</label>
+          <select id="eng-mode">
+            <option value="custom">本地（自己起进程，占显存）</option>
+            <option value="remote">云端（转发到 API，不占显存）</option>
+          </select>
+        </div>
+        <div class="fi"><label>引擎名称</label><input id="eng-label" placeholder="例：Strata IQ2_XS"></div>
+      </div>
+
+      <div class="frow">
+        <div class="fi"><label>引擎 id</label><input id="eng-id" placeholder="strata-iq2xs / cloud-deepseek"></div>
+      </div>
+
+      <!-- 本地：启动文件 + 槽位 + argv -->
+      <div id="eng-local">
+        <div class="k" style="margin-bottom:6px">启动文件（exe / bat / ps1 / py）</div>
+        <div class="pathbox">
+          <input class="pathin" id="eng-file" spellcheck="false" placeholder="例：D:\strata\Strata-0.2.10\engine\strata.exe">
+          <button type="button" class="pick" data-act="pick" data-target="eng-file" data-mode="file" title="选启动文件（系统对话框）">📁 选择</button>
+        </div>
+
+        <div class="frow">
+          <div class="fi"><label>默认端口</label><input id="eng-port" inputmode="numeric" value="18095"></div>
+          <div class="fi"><label>槽位模板</label>
+            <select id="eng-template">
+              <option value="single">单槽位（ninfer / llama.cpp）</option>
+              <option value="config">配置文件（Strata server.py）</option>
+              <option value="strata">六槽位（直连 exe，如 llama.cpp 系）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="frow">
+          <div class="fi"><label>解释器（.py / .ps1 用，可留空）</label><input id="eng-interp" spellcheck="false" placeholder="例：D:\strata\Strata-0.2.10\.venv\Scripts\python.exe"></div>
+        </div>
+
+        <div class="note" id="eng-tpl-hint">单槽位 = 一个模型文件（.ninfer / .gguf / .safetensors）。</div>
+
+        <details class="plain">
+          <summary>高级：自定义参数模板</summary>
+          <div class="frow">
+            <div class="fi"><label>argv（空格分隔，可留空用默认）</label><input id="eng-argv" spellcheck="false" placeholder="--max-context {maxContext} --kv {kvDtype}"></div>
+          </div>
+          <div class="frow">
+            <div class="fi"><label>环境变量（每行 KEY=VALUE，可留空）</label>
+              <textarea id="eng-env" rows="4" spellcheck="false" class="envbox" placeholder="NINFER_KV_WINDOW={kvWindow}&#10;NINFER_HOST_PAGEABLE=1"></textarea>
+            </div>
+          </div>
+          <div class="note">有 <code>arg</code> 的槽位由系统自动拼（如 <code>--native 路径</code>），模板里不要再写 <code>{native}</code>。环境变量里的 <code>{kvWindow}</code> 会用模型档案的值渲染。</div>
+        </details>
+      </div>
+
+      <!-- 云端：baseURL + key + 模型清单，不启动进程 -->
+      <div id="eng-remote" hidden>
+        <div class="frow">
+          <div class="fi"><label>baseURL（要带 /v1）</label><input id="eng-baseurl" spellcheck="false" placeholder="https://api.deepseek.com/v1"></div>
+        </div>
+        <div class="frow">
+          <div class="fi"><label>API key</label>
+            <input id="eng-key" type="password" spellcheck="false" placeholder="sk-...">
+          </div>
+          <div class="fi"><label>环境变量（可选，优先于上面的 key）</label><input id="eng-keyenv" spellcheck="false" placeholder="例：DEEPSEEK_API_KEY"></div>
+        </div>
+        <div class="frow">
+          <div class="fi"><label>云端模型（每行一个，可写 <code>id</code> 或 <code>id, 上下文, 最大输出</code>）</label>
+            <textarea id="eng-remote-models" rows="4" spellcheck="false" class="envbox"
+              placeholder="deepseek-chat, 65536, 8192&#10;deepseek-reasoner"></textarea>
+          </div>
+        </div>
+        <div class="note">云端模型不占显存、不用加载，配好就能在网关 <code>/v1</code> 里直接用。key 存在 <code>data/secrets.json</code>，不会写进引擎档案，导出配置时也不会带出去。</div>
+      </div>
+
+      <div class="warnrow" id="eng-warn" hidden></div>
+    </div>
+    <div class="cfoot">
+      <button type="button" class="btn ghost" data-close="m-engine">取消</button>
+      <button type="button" class="btn primary" data-act="engine-save">创建引擎</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     弹窗 1/6 · 导入整合包（扫描结果 + 手动兜底 + 启动方式）
+     ========================================================================== -->
+<div class="modal" id="m-import">
+  <div class="card" style="width:560px">
+    <div class="chead">导入整合包 <span class="espacer"></span><button type="button" class="btn ghost" data-close="m-import">✕</button></div>
+    <div class="cbody cfgs">
+      <div class="steps"><b>①</b> 选文件夹 <span>·</span> <b>②</b> 确认扫描 <span>·</span> <b>③</b> 试启动 <span>·</span> <b>④</b> 导入</div>
+
+      <div class="k" style="margin-bottom:6px">整合包文件夹 / 启动脚本</div>
+      <div class="pathbox">
+        <input class="pathin" id="imp-dir" spellcheck="false" placeholder="例：D:\下载\Qwen3.8-27B-整合包">
+        <button type="button" class="pick" data-act="pick" data-target="imp-dir" data-mode="dir" title="选整合包文件夹（系统对话框）">📁 选择</button>
+        <button type="button" class="pick" data-act="import-scan">扫描</button>
+      </div>
+      <div class="note">扫描会找：启动脚本（.bat / .cmd）→ 引擎（.exe）→ 模型（.gguf / .ninfer / .safetensors）。多个脚本会列出来让你选。</div>
+
+      <!-- 扫描结果由 app.js 填 -->
+      <div id="imp-result"></div>
+
+      <div class="sec">启动方式</div>
+      <label class="chk"><input type="radio" name="imp-mode" value="custom" checked> 按参数运行（之后能调）</label>
+      <label class="chk"><input type="radio" name="imp-mode" value="package"> 原样运行 bat（最稳，改不了）</label>
+
+      <details class="plain" id="imp-manual">
+        <summary>手动填写 / 修改</summary>
+        <div class="frow">
+          <div class="fi"><label>引擎名称</label><input id="imp-eng-label" placeholder="例：NInfer 120a (RTX 50)"></div>
+          <div class="fi"><label>引擎 id</label><input id="imp-eng-id" placeholder="ninfer-120a"></div>
+        </div>
+        <div class="frow">
+          <div class="fi"><label>启动文件（exe / bat）</label>
+          <div class="pathbox">
+            <input class="pathin" id="imp-eng-file" spellcheck="false" placeholder="启动文件的完整路径">
+            <button type="button" class="pick" data-act="pick" data-target="imp-eng-file" data-mode="file" title="选文件（系统对话框）">📁</button>
+          </div>
+        </div>
+        </div>
+        <div class="frow">
+          <div class="fi"><label>默认端口</label><input id="imp-eng-port" inputmode="numeric" placeholder="18095"></div>
+          <div class="fi"><label>模型名称</label><input id="imp-model-label" placeholder="例：Qwen3.8 27B · 常规"></div>
+        </div>
+        <div class="frow">
+          <div class="fi"><label>模型文件（单槽位引擎）</label>
+          <div class="pathbox">
+            <input class="pathin" id="imp-model-file" spellcheck="false" placeholder="选完会自动填上面的名称 / id">
+            <button type="button" class="pick" data-act="pick" data-target="imp-model-file" data-mode="file" title="选文件（系统对话框）">📁</button>
+          </div>
+        </div>
+        </div>
+        <div class="frow">
+          <div class="fi"><label>模型 id</label><input id="imp-model-id" placeholder="qwen3.8-27b"></div>
+        </div>
+        <div class="note">手动填写只适用于单槽位引擎；多槽位引擎（Strata 那种 6–7 个文件）请用扫描，避免漏文件。</div>
+      </details>
+
+      <div class="warnrow" id="imp-warn" hidden></div>
+    </div>
+    <div class="cfoot">
+      <button type="button" class="btn ghost" data-close="m-import">取消</button>
+      <button type="button" class="btn" data-act="import-probe">试启动</button>
+      <button type="button" class="btn primary" data-act="import-save">导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     弹窗 2/6 · 试启动（SSE 日志流 + 探端口 + 手填兜底）
+     这个弹窗同时被「运行日志」复用（换标题、隐藏手动端口）
+     ========================================================================== -->
+<div class="modal" id="m-probe">
+  <div class="card" style="width:600px">
+    <div class="chead"><span class="dot warn" id="probe-dot"></span> <span id="probe-title">试启动</span><span class="espacer"></span><button type="button" class="btn ghost" data-close="m-probe">✕</button></div>
+    <div class="cbody cfgs">
+      <div class="probeline" id="probe-status">准备中…</div>
+      <div class="pathbox" id="probe-portbox" hidden><span id="probe-port"></span><span id="probe-readyurl" style="color:var(--blue);font-size:11px"></span></div>
+      <div class="warnrow" id="probe-stalled" hidden></div>
+      <pre class="logs" id="probe-log"></pre>
+      <div class="frow" id="probe-manual">
+        <div class="fi"><label>探不到端口？自己填一个</label><input id="probe-portin" inputmode="numeric" placeholder="18095"></div>
+        <div class="fi" style="flex:0 0 auto;display:flex;align-items:flex-end"><button type="button" class="btn" data-act="probe-use-port">用它</button></div>
+      </div>
+      <div class="hint" id="probe-hint">不设死超时：引擎慢就让它等。30 秒一行输出都没有，才提示「脚本可能停在等输入」。</div>
+    </div>
+    <div class="cfoot">
+      <button type="button" class="btn ghost" data-close="m-probe">取消</button>
+      <button type="button" class="btn danger" data-act="probe-stop" id="probe-stop">停止</button>
+      <button type="button" class="btn primary" data-act="probe-accept" id="probe-accept" disabled>就用这个端口</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     弹窗 3/6 · 模型配置（点模型行打开；新建也用它）
+     ========================================================================== -->
+<div class="modal" id="m-cfg">
+  <div class="card" style="width:540px">
+    <div class="chead" id="cfg-head"></div>
+    <div class="cbody cfgs" id="cfg-body"></div>
+    <div class="cfoot" id="cfg-foot"></div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     弹窗 4/6 · 显存不足（预计 / 可用 / 缺口 / 依据，仍然加载 = force）
+     ========================================================================== -->
+<div class="modal" id="m-vram">
+  <div class="card" style="width:420px">
+    <div class="chead"><span class="dot warn"></span> <span id="vram-title">显存可能不够</span></div>
+    <div class="cbody cfgs" id="vram-body"></div>
+    <div class="cfoot">
+      <button type="button" class="btn ghost" data-close="m-vram">取消</button>
+      <button type="button" class="btn danger" data-act="vram-force">试试看（强行加载）</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     弹窗 5/6 · 还有请求在跑（关闭前确认）
+     ========================================================================== -->
+<div class="modal" id="m-inflight">
+  <div class="card" style="width:400px">
+    <div class="chead"><span class="dot warn"></span> 还有请求在跑</div>
+    <div class="cbody" id="inflight-body"></div>
+    <div class="cfoot">
+      <button type="button" class="btn" data-act="inflight-wait">等它结束</button>
+      <button type="button" class="btn danger" data-act="inflight-force">强制关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     弹窗 6/6 · 接入 DSH（复制 / 写入 llm-pi-ai 配置）
+     ========================================================================== -->
+<div class="modal" id="m-dsh">
+  <div class="card" style="width:520px">
+    <div class="chead">接入 DSH <span class="espacer"></span><button type="button" class="btn ghost" data-close="m-dsh">✕</button></div>
+    <div class="cbody cfgs">
+      <div class="hint" style="margin:0 0 10px">把下面这段 YAML 发给 agent，让它写进 cordis.patch.yml（每个模型的上下文都在里面）。</div>
+      <pre class="yaml" id="dsh-yaml">加载中…</pre>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="dsh-no-tools"> 本地模型禁用除基本工具外的其他工具</label>
+      <div class="warnrow" id="dsh-warn" hidden></div>
+    </div>
+    <div class="cfoot">
+      <button type="button" class="btn ghost" data-close="m-dsh">关闭</button>
+      <button type="button" class="btn" data-act="dsh-local" id="dsh-local" hidden>本地生成（临时）</button>
+      <button type="button" class="btn primary" data-act="dsh-copy">复制</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     选路径：默认弹 Windows 原生对话框（POST /api/dialog），
+     原生框起不来 / 接口不在时退回下面的页面内选择器。
+     原生框由控制台的 powershell 子进程弹出，可能躲在浏览器后面，所以等待时
+     盖一层很淡的蓝，右下角留一个「用页面内选择」的出口。
+     ========================================================================== -->
+<div class="picker" id="picker" tabindex="-1" hidden>
+  <div class="pkg-head" id="picker-head">
+    <span class="pkg-title" id="picker-title">选择文件</span>
+    <span class="pkg-target" id="picker-target"></span>
+    <span class="espacer"></span>
+    <span class="pkg-count" id="picker-count"></span>
+    <button type="button" class="btn ghost pkg-x" id="picker-close" aria-label="关闭">✕</button>
+  </div>
+
+  <div class="pkg-top">
+    <button type="button" class="btn ghost" id="picker-up" title="上一层（Alt+↑）">↑ 上一层</button>
+    <input class="pathin pkg-path" id="picker-path" spellcheck="false" placeholder="直接粘贴路径，回车跳过去">
+    <button type="button" class="btn" id="picker-go">前往</button>
+    <button type="button" class="btn ghost" id="picker-drives" title="列出所有盘符">盘符</button>
+  </div>
+
+  <div class="pkg-quick" id="picker-quick"></div>
+
+  <div class="pkg-list" id="picker-list" tabindex="0"></div>
+
+  <div class="pkg-foot">
+    <span class="pkg-hint" id="picker-hint">双击进入文件夹 · 双击文件即选中</span>
+    <span class="espacer"></span>
+    <input class="pathin pkg-name" id="picker-name" spellcheck="false" placeholder="文件名（可留空）">
+    <button type="button" class="btn ghost" id="picker-cancel">取消</button>
+    <button type="button" class="btn primary" id="picker-ok">用这个</button>
+  </div>
+</div>
+
+<!-- 在真实窗口上盖一层很淡的蓝；等原生对话框时，右下角留一个兜底出口 -->
+<div class="pick-veil" id="pick-veil" hidden>
+  <span id="pick-veil-text">正在选择路径…</span>
+  <button type="button" class="btn ghost" id="pick-veil-fallback" hidden>没看到对话框？用页面内选择</button>
+</div>
+
+<div class="toastbox" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

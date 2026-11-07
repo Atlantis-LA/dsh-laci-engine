@@ -1,0 +1,15 @@
+# dsh-laci-engine：内置 LACI 控制台（插件根/laci）。
+# 安装/启用后自动挂侧边栏入口，并在 3102 拉起控制台；网关 8096。
+- insert:
+    - id: laci-engine
+      name: "dsh-laci-engine"
+      config:
+        # 旧的“插件自己拉引擎”接口默认关闭；正常使用走 LACI 控制台。
+        toolLoopGuard: false
+        modelBridge:
+          enabled: false
+        console:
+          entry: server.mjs
+          port: 3102
+          gatewayPort: 8096
+          autoStart: true
