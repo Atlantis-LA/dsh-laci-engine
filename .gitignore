@@ -1,0 +1,18 @@
+# 数据 / 日志
+data/
+logs/
+*.log
+secrets.json
+
+# 依赖 / 构建
+node_modules/
+dist/
+build/
+
+# 备份 / 临时
+*.bak
+*.bak-*
+*.tmp
+*.tmp.*
+.DS_Store
+Thumbs.db
